@@ -1,0 +1,557 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dashboard Integrado - Fila de Regulação CROSS</title>
+    
+    <!-- Bibliotecas -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/date-fns@2.30.0/index.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/date-fns@2.30.0/locale/pt-BR/index.min.js"></script>
+
+    <style>
+        body { font-family: 'Inter', sans-serif; background-color: #f8fafc; color: #334155; }
+        .chart-container { position: relative; height: 400px; width: 100%; }
+        .card { background: white; border-radius: 0.75rem; box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1); padding: 1.5rem; }
+        #loading { display: flex; justify-content: center; items-center; height: 100vh; flex-direction: column; }
+    </style>
+</head>
+<body class="p-6 max-w-7xl mx-auto">
+
+    <!-- Tela de Carregamento -->
+    <div id="loading">
+        <div class="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mb-4"></div>
+        <p class="text-lg text-slate-600">Carregando dados de "pacientes na CROSS.csv"...</p>
+    </div>
+
+    <!-- Conteúdo Principal (Oculto inicialmente) -->
+    <div id="mainContainer" class="hidden">
+        
+        <!-- Cabeçalho -->
+        <div class="mb-6 flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+            <div>
+                <h1 class="text-3xl font-bold text-slate-900">Dashboard CROSS</h1>
+                <p class="text-slate-500">Monitoramento da Fila de Regulação</p>
+            </div>
+            <!-- Botão de Refresh caso queira forçar recarregamento -->
+            <button onclick="location.reload()" class="px-4 py-2 bg-white border border-slate-300 rounded shadow-sm hover:bg-slate-50 text-slate-700 transition text-sm">
+                Atualizar Dados
+            </button>
+        </div>
+
+        <div id="dashboardContent" class="flex flex-col gap-8">
+            
+            <!-- Filtros -->
+            <div class="card bg-slate-50 border border-slate-200">
+                <div class="flex flex-col md:flex-row gap-4 items-end">
+                    <div class="w-full md:w-auto flex-1">
+                        <label class="block text-xs font-bold text-slate-600 mb-1 uppercase">Data Início</label>
+                        <input type="date" id="startDate" class="w-full p-2 border border-slate-300 rounded focus:ring-2 focus:ring-blue-500 outline-none">
+                    </div>
+                    <div class="w-full md:w-auto flex-1">
+                        <label class="block text-xs font-bold text-slate-600 mb-1 uppercase">Data Fim</label>
+                        <input type="date" id="endDate" class="w-full p-2 border border-slate-300 rounded focus:ring-2 focus:ring-blue-500 outline-none">
+                    </div>
+                    <button onclick="applyFilter()" class="w-full md:w-auto px-6 py-2 bg-blue-600 text-white font-semibold rounded hover:bg-blue-700 transition shadow">
+                        Aplicar Filtro
+                    </button>
+                </div>
+            </div>
+
+            <!-- KPIs -->
+            <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
+                <div class="card border-l-4 border-slate-400 py-4">
+                    <p class="text-sm text-slate-500 font-medium">Dias com Dados</p>
+                    <p class="text-2xl font-bold text-slate-800" id="kpiDays">0</p>
+                </div>
+                <div class="card border-l-4 border-blue-500 py-4">
+                    <p class="text-sm text-slate-500 font-medium">Média Diária (Período)</p>
+                    <p class="text-2xl font-bold text-slate-800" id="kpiAvg">0</p>
+                </div>
+                <div class="card border-l-4 border-rose-500 py-4">
+                    <p class="text-sm text-slate-500 font-medium">Pico Máximo</p>
+                    <p class="text-2xl font-bold text-slate-800" id="kpiMax">0</p>
+                    <p class="text-xs text-slate-400" id="kpiMaxDate">-</p>
+                </div>
+                <div class="card border-l-4 border-orange-500 py-4">
+                    <p class="text-sm text-slate-500 font-medium">Média Histórica Global</p>
+                    <p class="text-2xl font-bold text-slate-800" id="kpiGlobalAvg">0</p>
+                </div>
+            </div>
+
+            <!-- 1. Detalhe Diário -->
+            <div class="card">
+                <div class="mb-4 border-b pb-2">
+                    <h2 class="font-bold text-xl text-slate-800">📊 Detalhe Diário (Foco Recente)</h2>
+                    <p class="text-sm text-slate-500">Barras: Pacientes reais. Linha: Tendência (Média Móvel 7 dias sobre dias úteis).</p>
+                </div>
+                <div class="chart-container"><canvas id="chartDaily"></canvas></div>
+            </div>
+
+            <!-- 2. Comparativo Sazonal -->
+            <div class="card">
+                <div class="mb-4 border-b pb-2">
+                    <h2 class="font-bold text-xl text-slate-800">📅 Comparativo Sazonal (Ano x Ano)</h2>
+                    <p class="text-sm text-slate-500">Média acumulada por mês para identificar padrões sazonais.</p>
+                </div>
+                <div class="chart-container"><canvas id="chartSeasonal"></canvas></div>
+            </div>
+
+            <!-- 3. Linha do Tempo & Projeção -->
+            <div class="card">
+                <div class="mb-4 border-b pb-2">
+                    <h2 class="font-bold text-xl text-slate-800">📈 Linha do Tempo & Projeção Futura</h2>
+                    <p class="text-sm text-slate-500">Histórico completo + Projeção de tendência para 30 dias (Baseada nos últimos 60 dias).</p>
+                </div>
+                <div class="chart-container"><canvas id="chartHistory"></canvas></div>
+            </div>
+
+            <!-- 4. Comparativo Epidemiológico -->
+            <div class="card">
+                <div class="mb-4 border-b pb-2">
+                    <h2 class="font-bold text-xl text-slate-800">🔄 Comparativo Epidemiológico (Suavizado)</h2>
+                    <p class="text-sm text-slate-500">Sobreposição dos anos com Média Móvel de 7 dias para facilitar leitura da tendência.</p>
+                </div>
+                <div class="chart-container"><canvas id="chartEpidemic"></canvas></div>
+            </div>
+
+            <!-- 5. Origem dos Pacientes -->
+            <div class="card">
+                <div class="mb-4 border-b pb-2">
+                    <h2 class="font-bold text-xl text-slate-800">🏥 Origem dos Pacientes (Volume Acumulado)</h2>
+                    <p class="text-sm text-slate-500">Distribuição mensal compacta por unidade.</p>
+                </div>
+                <div class="chart-container"><canvas id="chartUnits"></canvas></div>
+            </div>
+
+        </div>
+    </div>
+
+    <script>
+        let allData = [];
+        let globalAverage = 0;
+        let charts = {};
+        
+        // Nome do arquivo CSV que deve estar na mesma pasta (case sensitive no GitHub Pages)
+        const CSV_FILENAME = 'pacientes na CROSS.csv';
+
+        // Configurações globais do Chart.js para pt-BR
+        Chart.defaults.font.family = "'Inter', sans-serif";
+        Chart.defaults.color = '#64748b';
+
+        const colorPalette = [
+            '#2563eb', '#dc2626', '#16a34a', '#d97706', 
+            '#9333ea', '#0891b2', '#db2777', '#4b5563'
+        ];
+
+        // Inicia carregamento automático ao abrir a página
+        window.addEventListener('DOMContentLoaded', loadCSV);
+
+        async function loadCSV() {
+            try {
+                // Tenta buscar o arquivo CSV
+                const response = await fetch(CSV_FILENAME);
+                
+                if (!response.ok) {
+                    throw new Error(`Arquivo não encontrado (${response.status})`);
+                }
+
+                const csvText = await response.text();
+                processData(csvText);
+
+            } catch (error) {
+                console.error(error);
+                document.getElementById('loading').innerHTML = `
+                    <div class="text-center text-rose-600">
+                        <p class="font-bold text-xl mb-2">Erro ao carregar dados</p>
+                        <p>Certifique-se que o arquivo <code>${CSV_FILENAME}</code> está na mesma pasta.</p>
+                        <p class="text-sm mt-2 text-slate-500">${error.message}</p>
+                    </div>
+                `;
+            }
+        }
+
+        function processData(csvText) {
+            Papa.parse(csvText, {
+                header: true, 
+                delimiter: ";", 
+                skipEmptyLines: true,
+                complete: function(results) {
+                    if (results.data.length) {
+                        parseData(results.data);
+                        initDashboard();
+                    } else {
+                        alert("O arquivo CSV parece estar vazio.");
+                    }
+                }
+            });
+        }
+
+        function parsePtDate(dateStr) {
+            if (!dateStr) return null;
+            const parts = dateStr.split('/');
+            if (parts.length !== 3) return null;
+            return new Date(parts[2], parts[1] - 1, parts[0]);
+        }
+
+        function parseData(data) {
+            allData = data.map(row => {
+                const dateObj = parsePtDate(row['Data']);
+                if (!dateObj || isNaN(dateObj)) return null;
+
+                const total = (parseInt(row['PSR'])||0) + (parseInt(row['PSI'])||0) + 
+                              (parseInt(row['AEROPORTO'])||0) + (parseInt(row['ANITA'])||0) + 
+                              (parseInt(row['A07/A08'])||0);
+
+                return {
+                    date: dateObj,
+                    total: total,
+                    psr: parseInt(row['PSR'])||0,
+                    psi: parseInt(row['PSI'])||0,
+                    aero: parseInt(row['AEROPORTO'])||0,
+                    anita: parseInt(row['ANITA'])||0,
+                    a07: parseInt(row['A07/A08'])||0
+                };
+            }).filter(d => d !== null).sort((a, b) => a.date - b.date);
+
+            if (allData.length > 0) {
+                const sum = allData.reduce((acc, curr) => acc + curr.total, 0);
+                globalAverage = (sum / allData.length).toFixed(1);
+            }
+        }
+
+        function initDashboard() {
+            // Esconde Loading, Mostra Dashboard
+            document.getElementById('loading').style.display = 'none';
+            document.getElementById('mainContainer').classList.remove('hidden');
+            
+            document.getElementById('kpiGlobalAvg').innerText = globalAverage;
+
+            if (allData.length > 0) {
+                const lastDate = allData[allData.length - 1].date;
+                const firstDate = new Date(lastDate);
+                firstDate.setMonth(firstDate.getMonth() - 6);
+                const actualFirstDate = firstDate < allData[0].date ? allData[0].date : firstDate;
+                
+                document.getElementById('endDate').value = lastDate.toISOString().split('T')[0];
+                document.getElementById('startDate').value = actualFirstDate.toISOString().split('T')[0];
+            }
+            applyFilter();
+        }
+
+        // --- CÁLCULOS (Mantidos idênticos à versão Drag & Drop) ---
+
+        function calculateMovingAverage(data, windowSize) {
+            const result = [];
+            for (let i = 0; i < data.length; i++) {
+                if (i < windowSize - 1) {
+                    result.push(null);
+                    continue;
+                }
+                const slice = data.slice(i - windowSize + 1, i + 1);
+                const avg = slice.reduce((sum, val) => sum + val.y, 0) / windowSize;
+                result.push({ x: data[i].x, y: avg });
+            }
+            return result;
+        }
+
+        // Regressão Linear Simples
+        function calculateLinearRegression(data, daysToProject = 30) {
+            const recentData = data.slice(-60); 
+            let n = recentData.length;
+            if (n < 2) return null;
+
+            let sumX = 0, sumY = 0, sumXY = 0, sumXX = 0;
+            const startTimestamp = recentData[0].date.getTime();
+
+            recentData.forEach(d => {
+                let x = (d.date.getTime() - startTimestamp) / (1000 * 60 * 60 * 24);
+                let y = d.total;
+                sumX += x; sumY += y; sumXY += (x * y); sumXX += (x * x);
+            });
+
+            const slope = (n * sumXY - sumX * sumY) / (n * sumXX - sumX * sumX);
+            const intercept = (sumY - slope * sumX) / n;
+
+            const lastDataPoint = recentData[recentData.length - 1];
+            const lastX = (lastDataPoint.date.getTime() - startTimestamp) / (1000 * 60 * 60 * 24);
+            
+            const startProjY = slope * lastX + intercept;
+            
+            const futureDate = new Date(lastDataPoint.date);
+            futureDate.setDate(futureDate.getDate() + daysToProject);
+            const endX = lastX + daysToProject;
+            const endProjY = slope * endX + intercept;
+
+            return [
+                { x: lastDataPoint.date, y: startProjY },
+                { x: futureDate, y: Math.max(0, endProjY) }
+            ];
+        }
+
+        function applyFilter() {
+            const startStr = document.getElementById('startDate').value;
+            const endStr = document.getElementById('endDate').value;
+            if(!startStr || !endStr) return;
+
+            const start = new Date(startStr);
+            const end = new Date(endStr);
+            end.setHours(23, 59, 59);
+
+            const filteredData = allData.filter(d => d.date >= start && d.date <= end);
+
+            updateKPIs(filteredData);
+            
+            renderDailyDetailChart(filteredData); 
+            renderSeasonalChart(allData);         
+            renderHistoryChart(filteredData);     
+            renderEpidemicChart(filteredData);    
+            renderUnitsChart(filteredData);       
+        }
+
+        function updateKPIs(data) {
+            if (!data.length) return;
+            const avg = (data.reduce((a,b)=>a+b.total,0) / data.length).toFixed(1);
+            let maxVal = 0, maxDate = '';
+            data.forEach(d => { if(d.total > maxVal) { maxVal = d.total; maxDate = d.date.toLocaleDateString('pt-BR'); }});
+
+            document.getElementById('kpiDays').innerText = data.length;
+            document.getElementById('kpiAvg').innerText = avg;
+            document.getElementById('kpiMax').innerText = maxVal;
+            document.getElementById('kpiMaxDate').innerText = maxDate;
+        }
+
+        function destroyChart(key) { if(charts[key]) { charts[key].destroy(); charts[key] = null; } }
+
+        // ================= GRÁFICOS =================
+
+        // 1. Detalhe Diário
+        function renderDailyDetailChart(data) {
+            const ctx = document.getElementById('chartDaily');
+            destroyChart('daily');
+
+            const formattedData = data.map(d => ({ x: d.date, y: d.total }));
+            const maDataRaw = calculateMovingAverage(formattedData, 7);
+            const maData = maDataRaw.filter(point => point !== null);
+
+            charts['daily'] = new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    datasets: [
+                        {
+                            type: 'line', 
+                            label: 'Média 7d (Tendência)', 
+                            data: maData,
+                            borderColor: '#f97316', 
+                            borderWidth: 3, 
+                            pointRadius: 0, 
+                            tension: 0.4,
+                            spanGaps: true,
+                            order: 0
+                        },
+                        {
+                            type: 'bar', 
+                            label: 'Pacientes', 
+                            data: formattedData,
+                            backgroundColor: '#93c5fd', 
+                            hoverBackgroundColor: '#3b82f6', 
+                            barPercentage: 0.6, 
+                            order: 1
+                        }
+                    ]
+                },
+                options: {
+                    responsive: true, 
+                    maintainAspectRatio: false,
+                    scales: {
+                        x: { 
+                            type: 'time', 
+                            time: { unit: 'day', displayFormats: { day: 'dd/MM' } }, 
+                            grid: { display: false }, 
+                            offset: true 
+                        },
+                        y: { beginAtZero: true, grid: { color: '#f1f5f9' } }
+                    },
+                    plugins: { tooltip: { mode: 'index', intersect: false } }
+                }
+            });
+        }
+
+        // 2. Comparativo Sazonal
+        function renderSeasonalChart(data) {
+            const ctx = document.getElementById('chartSeasonal');
+            destroyChart('seasonal');
+
+            const years = {};
+            data.forEach(d => {
+                const y = d.date.getFullYear();
+                const m = d.date.getMonth();
+                if(!years[y]) years[y] = Array(12).fill(null).map(()=>({sum:0, count:0}));
+                years[y][m].sum += d.total;
+                years[y][m].count++;
+            });
+
+            const sortedYears = Object.keys(years).sort();
+            const datasets = sortedYears.map((year, idx) => {
+                const color = colorPalette[idx % colorPalette.length];
+                return {
+                    label: year,
+                    data: years[year].map(m => m.count ? m.sum/m.count : null),
+                    tension: 0.3, borderWidth: 2, borderColor: color, backgroundColor: color
+                };
+            });
+
+            datasets.push({
+                label: 'Média Histórica',
+                data: Array(12).fill(globalAverage),
+                borderColor: '#94a3b8', borderWidth: 2, borderDash: [5, 5], pointRadius: 0, order: 999
+            });
+
+            charts['seasonal'] = new Chart(ctx, {
+                type: 'line',
+                data: { labels: ['Jan','Fev','Mar','Abr','Mai','Jun','Jul','Ago','Set','Out','Nov','Dez'], datasets },
+                options: { responsive: true, maintainAspectRatio: false, interaction: {mode:'index', intersect:false} }
+            });
+        }
+
+        // 3. Linha do Tempo & Projeção
+        function renderHistoryChart(data) {
+            const ctx = document.getElementById('chartHistory');
+            destroyChart('history');
+            
+            const realDataPoints = data.map(d => ({ x: d.date, y: d.total }));
+            const projectionPoints = calculateLinearRegression(data, 30);
+
+            const datasets = [
+                { 
+                    label: 'Total Pacientes', 
+                    data: realDataPoints, 
+                    borderColor:'#3b82f6', 
+                    backgroundColor: 'rgba(59, 130, 246, 0.1)', 
+                    borderWidth:1.5, 
+                    pointRadius:1, 
+                    fill:true 
+                }
+            ];
+
+            if (projectionPoints) {
+                datasets.push({
+                    label: 'Projeção (30 dias)', 
+                    data: projectionPoints,
+                    borderColor: '#dc2626', 
+                    borderWidth: 2, 
+                    borderDash: [5, 5], 
+                    pointRadius: 0, 
+                    fill: false
+                });
+            }
+
+            charts['history'] = new Chart(ctx, {
+                type: 'line',
+                data: { datasets },
+                options: { 
+                    responsive: true, maintainAspectRatio: false, 
+                    scales: { x: { type: 'time', time: { unit: 'month' } } },
+                    interaction: { mode: 'index', intersect: false }
+                }
+            });
+        }
+
+        // 4. Comparativo Epidemiológico
+        function renderEpidemicChart(data) {
+            const ctx = document.getElementById('chartEpidemic');
+            destroyChart('epidemic');
+
+            const yearsMap = {};
+            data.forEach(d => {
+                const y = d.date.getFullYear();
+                if(!yearsMap[y]) yearsMap[y] = [];
+                const normalizedDate = new Date(2000, d.date.getMonth(), d.date.getDate());
+                yearsMap[y].push({ x: normalizedDate.getTime(), y: d.total });
+            });
+
+            const datasets = Object.keys(yearsMap).sort().map((y, idx) => {
+                const color = colorPalette[idx % colorPalette.length]; 
+                const rawPoints = yearsMap[y];
+                const smoothedPoints = calculateMovingAverage(rawPoints, 7).filter(p => p !== null);
+
+                return {
+                    label: y,
+                    data: smoothedPoints,
+                    borderColor: color, 
+                    borderWidth: 2, 
+                    pointRadius: 0, 
+                    tension: 0.4, 
+                    spanGaps: true
+                };
+            });
+
+            charts['epidemic'] = new Chart(ctx, {
+                type: 'line',
+                data: { datasets },
+                options: {
+                    responsive: true, maintainAspectRatio: false,
+                    scales: {
+                        x: {
+                            type: 'time', 
+                            time: { unit: 'month', displayFormats: { month: 'MMM' } },
+                            min: new Date(2000, 0, 1).getTime(), max: new Date(2000, 11, 31).getTime()
+                        }
+                    },
+                    plugins: { 
+                        tooltip: { callbacks: { title: (ctx) => { const d = new Date(ctx[0].parsed.x); return d.toLocaleDateString('pt-BR', {day:'2-digit', month:'long'}); } } },
+                        legend: { position: 'top' }
+                    }
+                }
+            });
+        }
+
+        // 5. Unidades (Origem)
+        function renderUnitsChart(data) {
+            const ctx = document.getElementById('chartUnits');
+            destroyChart('units');
+            
+            const grouped = {};
+            data.forEach(d => {
+                const sortKey = `${d.date.getFullYear()}-${String(d.date.getMonth()+1).padStart(2,'0')}`;
+                if(!grouped[sortKey]) grouped[sortKey] = { psr:0, psi:0, aero:0, anita:0, a07:0, labelDate: d.date };
+                grouped[sortKey].psr += d.psr; 
+                grouped[sortKey].psi += d.psi; 
+                grouped[sortKey].aero += d.aero;
+                grouped[sortKey].anita += d.anita; 
+                grouped[sortKey].a07 += d.a07;
+            });
+
+            const sortedKeys = Object.keys(grouped).sort();
+            const displayLabels = sortedKeys.map(k => {
+                const d = grouped[k].labelDate;
+                return d.toLocaleDateString('pt-BR', { month: 'short', year: 'numeric' });
+            });
+
+            const ds = (key, label, color) => ({
+                label: label, backgroundColor: color, data: sortedKeys.map(k => grouped[k][key])
+            });
+
+            charts['units'] = new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels: displayLabels, 
+                    datasets: [
+                        ds('psr','PSR','#3b82f6'), ds('psi','PSI','#10b981'), 
+                        ds('aero','Aeroporto','#f59e0b'), ds('anita','Anita','#8b5cf6'), ds('a07','A07/A08','#ec4899')
+                    ]
+                },
+                options: { 
+                    responsive: true, maintainAspectRatio: false, 
+                    scales: { x: { stacked: true }, y: { stacked: true } },
+                    interaction: { mode: 'index', intersect: false }
+                }
+            });
+        }
+    </script>
+</body>
+</html>
