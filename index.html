@@ -87,7 +87,7 @@
             <div class="card">
                 <div class="mb-4 border-b pb-2">
                     <h2 class="font-bold text-xl text-slate-800">📊 Detalhe Diário (Foco Recente)</h2>
-                    <p class="text-sm text-slate-500">Barras: Pacientes reais. Linha: Tendência (Média Móvel 7 dias sobre dias úteis).</p>
+                    <p class="text-sm text-slate-500">Barras: Total de pacientes aguardando regulação. Linha: Tendência (Média Móvel 7 dias sobre dias informados).</p>
                 </div>
                 <div class="chart-container"><canvas id="chartDaily"></canvas></div>
             </div>
@@ -128,18 +128,27 @@
                 <div class="chart-container"><canvas id="chartUnits"></canvas></div>
             </div>
 
+            <!-- 6. Tendência por Unidade -->
+            <div class="card">
+                <div class="mb-4 border-b pb-2">
+                    <h2 class="font-bold text-xl text-slate-800">📈 Tendência por Unidade (Média Móvel 7d)</h2>
+                    <p class="text-sm text-slate-500">Evolução suavizada da fila de espera para cada unidade de origem.</p>
+                </div>
+                <div class="chart-container"><canvas id="chartUnitsTrend"></canvas></div>
+            </div>
+
         </div>
     </div>
 
-    <script>
+<script>
         let allData = [];
         let globalAverage = 0;
         let charts = {};
         
-        // Nome do arquivo CSV que deve estar na mesma pasta (case sensitive no GitHub Pages)
+        // Nome do arquivo CSV
         const CSV_FILENAME = 'pacientes na CROSS.csv';
 
-        // Configurações globais do Chart.js para pt-BR
+        // Configurações globais
         Chart.defaults.font.family = "'Inter', sans-serif";
         Chart.defaults.color = '#64748b';
 
@@ -148,13 +157,12 @@
             '#9333ea', '#0891b2', '#db2777', '#4b5563'
         ];
 
-        // Inicia carregamento automático ao abrir a página
         window.addEventListener('DOMContentLoaded', loadCSV);
 
         async function loadCSV() {
             try {
-                // Tenta buscar o arquivo CSV
-                const response = await fetch(CSV_FILENAME);
+                // Cache Buster: ?t=tempo_atual força o navegador a baixar o arquivo novo
+                const response = await fetch(`${CSV_FILENAME}?t=${new Date().getTime()}`);
                 
                 if (!response.ok) {
                     throw new Error(`Arquivo não encontrado (${response.status})`);
@@ -180,6 +188,7 @@
                 header: true, 
                 delimiter: ";", 
                 skipEmptyLines: true,
+                transformHeader: h => h.trim(), // Limpa espaços extras dos títulos
                 complete: function(results) {
                     if (results.data.length) {
                         parseData(results.data);
@@ -199,13 +208,33 @@
         }
 
         function parseData(data) {
-            allData = data.map(row => {
+            console.log("Iniciando processamento dos dados..."); // Debug
+
+            allData = data.map((row, index) => {
                 const dateObj = parsePtDate(row['Data']);
                 if (!dateObj || isNaN(dateObj)) return null;
 
-                const total = (parseInt(row['PSR'])||0) + (parseInt(row['PSI'])||0) + 
-                              (parseInt(row['AEROPORTO'])||0) + (parseInt(row['ANITA'])||0) + 
-                              (parseInt(row['A07/A08'])||0);
+                // --- BUSCA INTELIGENTE DA COLUNA ---
+                // Procura a chave que contém "VAGA 0", ignorando maiúsculas/minúsculas
+                const keys = Object.keys(row);
+                const vagaKey = keys.find(k => k.toUpperCase().includes("VAGA 0"));
+                
+                let total = parseInt(row[vagaKey]);
+
+                // Debug específico para o dia problemático
+                if (row['Data'] === '26/02/2026') {
+                    console.log(`--- DEBUG DIA 26/02/2026 ---`);
+                    console.log(`Chave encontrada: ${vagaKey}`);
+                    console.log(`Valor Bruto: ${row[vagaKey]}`);
+                    console.log(`Valor Parseado: ${total}`);
+                }
+
+                // Fallback (apenas se a coluna total estiver vazia/NaN)
+                if (isNaN(total)) {
+                    total = (parseInt(row['PSR'])||0) + (parseInt(row['PSI'])||0) + 
+                            (parseInt(row['AEROPORTO'])||0) + (parseInt(row['ANITA'])||0) + 
+                            (parseInt(row['A07/A08'])||0);
+                }
 
                 return {
                     date: dateObj,
@@ -225,7 +254,6 @@
         }
 
         function initDashboard() {
-            // Esconde Loading, Mostra Dashboard
             document.getElementById('loading').style.display = 'none';
             document.getElementById('mainContainer').classList.remove('hidden');
             
@@ -233,23 +261,21 @@
 
             if (allData.length > 0) {
                 const lastDate = allData[allData.length - 1].date;
-                const firstDate = new Date(lastDate);
-                firstDate.setMonth(firstDate.getMonth() - 6);
-                const actualFirstDate = firstDate < allData[0].date ? allData[0].date : firstDate;
                 
+                // Formata datas para o input (YYYY-MM-DD)
                 document.getElementById('endDate').value = lastDate.toISOString().split('T')[0];
-                document.getElementById('startDate').value = actualFirstDate.toISOString().split('T')[0];
+                // Define a data inicial fixa como 01/01/2025
+                document.getElementById('startDate').value = '2025-01-01';
             }
             applyFilter();
         }
-
-        // --- CÁLCULOS (Mantidos idênticos à versão Drag & Drop) ---
 
         function calculateMovingAverage(data, windowSize) {
             const result = [];
             for (let i = 0; i < data.length; i++) {
                 if (i < windowSize - 1) {
-                    result.push(null);
+                    // CORREÇÃO: Retornar o objeto com a data e y: null para manter o alinhamento dos índices
+                    result.push({ x: data[i].x, y: null });
                     continue;
                 }
                 const slice = data.slice(i - windowSize + 1, i + 1);
@@ -259,7 +285,6 @@
             return result;
         }
 
-        // Regressão Linear Simples
         function calculateLinearRegression(data, daysToProject = 30) {
             const recentData = data.slice(-60); 
             let n = recentData.length;
@@ -298,9 +323,13 @@
             const endStr = document.getElementById('endDate').value;
             if(!startStr || !endStr) return;
 
-            const start = new Date(startStr);
-            const end = new Date(endStr);
-            end.setHours(23, 59, 59);
+            // Correção de Fuso Horário
+            const sParts = startStr.split('-');
+            const start = new Date(sParts[0], sParts[1] - 1, sParts[2]);
+
+            const eParts = endStr.split('-');
+            const end = new Date(eParts[0], eParts[1] - 1, eParts[2]);
+            end.setHours(23, 59, 59, 999);
 
             const filteredData = allData.filter(d => d.date >= start && d.date <= end);
 
@@ -311,13 +340,20 @@
             renderHistoryChart(filteredData);     
             renderEpidemicChart(filteredData);    
             renderUnitsChart(filteredData);       
+            renderUnitsTrendChart(filteredData);
         }
 
         function updateKPIs(data) {
             if (!data.length) return;
             const avg = (data.reduce((a,b)=>a+b.total,0) / data.length).toFixed(1);
             let maxVal = 0, maxDate = '';
-            data.forEach(d => { if(d.total > maxVal) { maxVal = d.total; maxDate = d.date.toLocaleDateString('pt-BR'); }});
+            
+            data.forEach(d => { 
+                if(d.total > maxVal) { 
+                    maxVal = d.total; 
+                    maxDate = d.date.toLocaleDateString('pt-BR'); 
+                }
+            });
 
             document.getElementById('kpiDays').innerText = data.length;
             document.getElementById('kpiAvg').innerText = avg;
@@ -325,21 +361,39 @@
             document.getElementById('kpiMaxDate').innerText = maxDate;
         }
 
-        function destroyChart(key) { if(charts[key]) { charts[key].destroy(); charts[key] = null; } }
+        function destroyChart(key) {
+            // Destruição Agressiva: Remove do DOM se necessário
+            const canvasIdMap = {
+                'daily': 'chartDaily',
+                'seasonal': 'chartSeasonal',
+                'history': 'chartHistory',
+                'epidemic': 'chartEpidemic',
+                'units': 'chartUnits',
+                'unitsTrend': 'chartUnitsTrend'
+            };
+
+            const canvasId = canvasIdMap[key];
+            if (canvasId) {
+                const chartInstance = Chart.getChart(canvasId);
+                if (chartInstance) {
+                    chartInstance.destroy();
+                }
+            }
+            if(charts[key]) charts[key] = null;
+        }
 
         // ================= GRÁFICOS =================
 
-        // 1. Detalhe Diário
         function renderDailyDetailChart(data) {
             const ctx = document.getElementById('chartDaily');
             destroyChart('daily');
 
             const formattedData = data.map(d => ({ x: d.date, y: d.total }));
-            const maDataRaw = calculateMovingAverage(formattedData, 7);
-            const maData = maDataRaw.filter(point => point !== null);
+            // CORREÇÃO: Removido o .filter(p => p !== null)
+            const maData = calculateMovingAverage(formattedData, 7);
 
             charts['daily'] = new Chart(ctx, {
-                type: 'bar',
+                type: 'bar', // Tipo base bar
                 data: {
                     datasets: [
                         {
@@ -350,8 +404,7 @@
                             borderWidth: 3, 
                             pointRadius: 0, 
                             tension: 0.4,
-                            spanGaps: true,
-                            order: 0
+                            order: 0 
                         },
                         {
                             type: 'bar', 
@@ -381,7 +434,6 @@
             });
         }
 
-        // 2. Comparativo Sazonal
         function renderSeasonalChart(data) {
             const ctx = document.getElementById('chartSeasonal');
             destroyChart('seasonal');
@@ -418,7 +470,6 @@
             });
         }
 
-        // 3. Linha do Tempo & Projeção
         function renderHistoryChart(data) {
             const ctx = document.getElementById('chartHistory');
             destroyChart('history');
@@ -461,7 +512,6 @@
             });
         }
 
-        // 4. Comparativo Epidemiológico
         function renderEpidemicChart(data) {
             const ctx = document.getElementById('chartEpidemic');
             destroyChart('epidemic');
@@ -477,7 +527,8 @@
             const datasets = Object.keys(yearsMap).sort().map((y, idx) => {
                 const color = colorPalette[idx % colorPalette.length]; 
                 const rawPoints = yearsMap[y];
-                const smoothedPoints = calculateMovingAverage(rawPoints, 7).filter(p => p !== null);
+                // CORREÇÃO: Removido o .filter(p => p !== null)
+                const smoothedPoints = calculateMovingAverage(rawPoints, 7);
 
                 return {
                     label: y,
@@ -510,7 +561,6 @@
             });
         }
 
-        // 5. Unidades (Origem)
         function renderUnitsChart(data) {
             const ctx = document.getElementById('chartUnits');
             destroyChart('units');
@@ -552,6 +602,58 @@
                 }
             });
         }
+
+        function renderUnitsTrendChart(data) {
+            const ctx = document.getElementById('chartUnitsTrend');
+            destroyChart('unitsTrend');
+
+            const units = ['psr', 'psi', 'aero', 'anita', 'a07'];
+            const labels = { psr: 'PSR', psi: 'PSI', aero: 'Aeroporto', anita: 'Anita', a07: 'A07/A08' };
+            const colors = { psr: '#3b82f6', psi: '#10b981', aero: '#f59e0b', anita: '#8b5cf6', a07: '#ec4899' };
+
+            const datasets = units.map(unit => {
+                const rawData = data.map(d => ({ x: d.date, y: d[unit] }));
+                const smoothedData = calculateMovingAverage(rawData, 7);
+                
+                return {
+                    label: labels[unit],
+                    data: smoothedData,
+                    borderColor: colors[unit],
+                    borderWidth: 2,
+                    pointRadius: 0,
+                    tension: 0.4,
+                    spanGaps: true
+                };
+            });
+
+            charts['unitsTrend'] = new Chart(ctx, {
+                type: 'line',
+                data: { datasets },
+                options: {
+                    responsive: true, maintainAspectRatio: false,
+                    scales: {
+                        x: { 
+                            type: 'time', 
+                            time: { unit: 'day', displayFormats: { day: 'dd/MM/yy' } },
+                            grid: { display: false }
+                        },
+                        y: { beginAtZero: true, grid: { color: '#f1f5f9' } }
+                    },
+                    interaction: { mode: 'index', intersect: false },
+                    plugins: {
+                        tooltip: {
+                            callbacks: {
+                                title: (ctx) => {
+                                    const d = new Date(ctx[0].parsed.x);
+                                    return d.toLocaleDateString('pt-BR');
+                                }
+                            }
+                        }
+                    }
+                }
+            });
+        }
     </script>
 </body>
 </html>
+
